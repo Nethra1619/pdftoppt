@@ -1,9 +1,17 @@
+import PptxGenJS from 'pptxgenjs';
+
 class PDFToPPTConverter {
     constructor() {
         this.currentFile = null;
+        this.pdfPages = [];
         this.initializeElements();
         this.attachEventListeners();
         this.setupDragAndDrop();
+        
+        // Configure PDF.js
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
     }
 
     initializeElements() {
@@ -157,75 +165,171 @@ class PDFToPPTConverter {
     }
 
     async convertPDFToPPT() {
-        // Simulate conversion process with progress updates
-        const steps = [
-            { text: 'Reading PDF file...', progress: 10 },
-            { text: 'Extracting pages...', progress: 25 },
-            { text: 'Processing images...', progress: 50 },
-            { text: 'Creating PowerPoint slides...', progress: 75 },
-            { text: 'Finalizing presentation...', progress: 90 },
-            { text: 'Preparing download...', progress: 100 }
-        ];
-
-        for (let i = 0; i < steps.length; i++) {
-            const step = steps[i];
-            this.updateProgress(step.progress, step.text);
+        try {
+            // Step 1: Read PDF file
+            this.updateProgress(10, 'Reading PDF file...');
+            const arrayBuffer = await this.currentFile.arrayBuffer();
             
-            // Simulate processing time
-            await this.delay(800 + Math.random() * 400);
+            // Step 2: Load PDF document
+            this.updateProgress(25, 'Loading PDF document...');
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            
+            // Step 3: Extract pages
+            this.updateProgress(40, 'Extracting PDF pages...');
+            this.pdfPages = [];
+            
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const viewport = page.getViewport({ scale: 2.0 });
+                
+                // Create canvas to render page
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                
+                // Render page to canvas
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+                
+                // Convert canvas to image data
+                const imageData = canvas.toDataURL('image/png');
+                this.pdfPages.push({
+                    pageNumber: pageNum,
+                    imageData: imageData,
+                    width: viewport.width,
+                    height: viewport.height
+                });
+                
+                // Update progress
+                const progress = 40 + (pageNum / pdf.numPages) * 30;
+                this.updateProgress(progress, `Processing page ${pageNum} of ${pdf.numPages}...`);
+            }
+            
+            // Step 4: Create PowerPoint presentation
+            this.updateProgress(75, 'Creating PowerPoint slides...');
+            await this.createPPTFile();
+            
+            // Step 5: Finalize
+            this.updateProgress(100, 'Finalizing presentation...');
+            await this.delay(500);
+            
+            // Show success section
+            this.progressSection.style.display = 'none';
+            this.successSection.style.display = 'block';
+            
+        } catch (error) {
+            console.error('PDF processing error:', error);
+            throw new Error('Failed to process PDF file');
         }
+    }
 
-        // Create a mock PPT file for download
-        await this.createPPTFile();
-        
-        // Show success section
-        this.progressSection.style.display = 'none';
-        this.successSection.style.display = 'block';
+    async createPPTFile() {
+        try {
+            // Create new PowerPoint presentation
+            const pptx = new PptxGenJS();
+            
+            // Set slide layout based on user selection
+            const layout = this.slideLayout.value === 'widescreen' ? 'LAYOUT_16x9' : 'LAYOUT_4x3';
+            pptx.layout = layout;
+            
+            // Add title slide
+            const titleSlide = pptx.addSlide();
+            titleSlide.addText('Converted from PDF', {
+                x: 1,
+                y: 1,
+                w: 8,
+                h: 1,
+                fontSize: 32,
+                bold: true,
+                align: 'center'
+            });
+            
+            titleSlide.addText(`Original file: ${this.currentFile.name}`, {
+                x: 1,
+                y: 2.5,
+                w: 8,
+                h: 0.5,
+                fontSize: 16,
+                align: 'center',
+                color: '666666'
+            });
+            
+            titleSlide.addText(`Converted on: ${new Date().toLocaleDateString()}`, {
+                x: 1,
+                y: 3,
+                w: 8,
+                h: 0.5,
+                fontSize: 14,
+                align: 'center',
+                color: '888888'
+            });
+            
+            // Add slides for each PDF page
+            for (let i = 0; i < this.pdfPages.length; i++) {
+                const pageData = this.pdfPages[i];
+                const slide = pptx.addSlide();
+                
+                // Calculate image dimensions to fit slide
+                const slideWidth = layout === 'LAYOUT_16x9' ? 10 : 10;
+                const slideHeight = layout === 'LAYOUT_16x9' ? 5.625 : 7.5;
+                
+                const imageAspectRatio = pageData.width / pageData.height;
+                const slideAspectRatio = slideWidth / slideHeight;
+                
+                let imgWidth, imgHeight, imgX, imgY;
+                
+                if (imageAspectRatio > slideAspectRatio) {
+                    // Image is wider than slide
+                    imgWidth = slideWidth * 0.9;
+                    imgHeight = imgWidth / imageAspectRatio;
+                    imgX = slideWidth * 0.05;
+                    imgY = (slideHeight - imgHeight) / 2;
+                } else {
+                    // Image is taller than slide
+                    imgHeight = slideHeight * 0.9;
+                    imgWidth = imgHeight * imageAspectRatio;
+                    imgX = (slideWidth - imgWidth) / 2;
+                    imgY = slideHeight * 0.05;
+                }
+                
+                // Add image to slide
+                slide.addImage({
+                    data: pageData.imageData,
+                    x: imgX,
+                    y: imgY,
+                    w: imgWidth,
+                    h: imgHeight
+                });
+                
+                // Add page number
+                slide.addText(`Page ${pageData.pageNumber}`, {
+                    x: slideWidth - 1.5,
+                    y: slideHeight - 0.5,
+                    w: 1,
+                    h: 0.3,
+                    fontSize: 10,
+                    align: 'center',
+                    color: '666666'
+                });
+            }
+            
+            // Generate the PowerPoint file
+            this.downloadBlob = await pptx.write('blob');
+            this.downloadFileName = this.currentFile.name.replace('.pdf', '.pptx');
+            
+        } catch (error) {
+            console.error('PowerPoint creation error:', error);
+            throw new Error('Failed to create PowerPoint file');
+        }
     }
 
     updateProgress(percentage, text) {
         this.progressFill.style.width = percentage + '%';
-        this.progressPercentage.textContent = percentage + '%';
+        this.progressPercentage.textContent = Math.round(percentage) + '%';
         this.progressText.textContent = text;
-    }
-
-    async createPPTFile() {
-        // In a real implementation, this would use libraries like:
-        // - PDF.js to extract PDF content
-        // - PptxGenJS or similar to create PowerPoint files
-        
-        // For this demo, we'll create a simple text file as a placeholder
-        const layout = this.slideLayout.value;
-        const quality = this.imageQuality.value;
-        
-        const pptContent = this.generateMockPPTContent(layout, quality);
-        
-        // Create blob and prepare for download
-        this.downloadBlob = new Blob([pptContent], { 
-            type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' 
-        });
-        
-        this.downloadFileName = this.currentFile.name.replace('.pdf', '.pptx');
-    }
-
-    generateMockPPTContent(layout, quality) {
-        // This is a simplified mock - in reality, you'd use proper PPTX generation
-        return `PowerPoint Presentation Generated from: ${this.currentFile.name}
-        
-Layout: ${layout}
-Quality: ${quality}
-Generated: ${new Date().toLocaleString()}
-
-This is a demo conversion. In a real implementation, this would be a proper PPTX file
-containing the slides extracted and converted from your PDF document.
-
-Features that would be included:
-- Each PDF page converted to a PowerPoint slide
-- Images and text extracted and positioned appropriately
-- Proper slide formatting based on selected layout
-- High-quality image rendering based on quality settings
-- Editable text elements where possible
-- Preserved formatting and layout structure`;
     }
 
     downloadFile() {
@@ -250,6 +354,7 @@ Features that would be included:
     resetConverter() {
         // Reset all states
         this.currentFile = null;
+        this.pdfPages = [];
         this.downloadBlob = null;
         this.downloadFileName = null;
 
